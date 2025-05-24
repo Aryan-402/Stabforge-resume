@@ -1,0 +1,256 @@
+/* Custom styles for Resume Portal */
+
+/* Background animation */
+body {
+    min-height: 100vh;
+    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+}
+
+@keyframes gradientBG {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+/* Card styles */
+.card {
+    border: none;
+    border-radius: 15px;
+    backdrop-filter: blur(10px);
+    background-color: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.45);
+}
+
+/* Form elements */
+.form-control {
+    border-radius: 10px;
+    border: 2px solid transparent;
+    padding: 12px;
+    transition: all 0.3s ease;
+    background-color: rgba(255, 255, 255, 0.9);
+}
+
+.form-control:focus {
+    border-color: #4a90e2;
+    box-shadow: 0 0 15px rgba(74, 144, 226, 0.3);
+    transform: translateY(-2px);
+}
+
+.form-label {
+    font-weight: 500;
+    color: #2c3e50;
+    transform-origin: left;
+    transition: all 0.3s ease;
+}
+
+/* Button styles */
+.btn-primary {
+    padding: 12px 30px;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(45deg, #4a90e2, #67b26f);
+    font-weight: 600;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.btn-primary:before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        120deg,
+        transparent,
+        rgba(255, 255, 255, 0.3),
+        transparent
+    );
+    transition: all 0.6s;
+}
+
+.btn-primary:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.btn-primary:hover:before {
+    left: 100%;
+}
+
+/* Link animations */
+a {
+    color: #4a90e2;
+    text-decoration: none;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+a:after {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 2px;
+    bottom: -2px;
+    left: 0;
+    background-color: #4a90e2;
+    transition: all 0.3s ease;
+}
+
+a:hover:after {
+    width: 100%;
+}
+
+/* Card title animation */
+.card h2 {
+    background: linear-gradient(45deg, #4a90e2, #67b26f);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: titleGradient 3s ease infinite;
+}
+
+@keyframes titleGradient {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+/* Input focus animation */
+.form-floating > .form-control:focus ~ label,
+.form-floating > .form-control:not(:placeholder-shown) ~ label {
+    transform: scale(0.85) translateY(-1rem) translateX(0.15rem);
+    color: #4a90e2;
+}
+
+/* Error shake animation */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+    20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+.shake {
+    animation: shake 0.5s ease-in-out;
+}
+
+/* Success message animation */
+.alert-success {
+    animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+    0% {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Loading spinner */
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #4a90e2;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    display: none;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding: 1rem;
+    }
+    
+    .card {
+        margin-bottom: 1rem;
+    }
+    
+    .btn-primary {
+        padding: 10px 20px;
+    }
+}
+
+/* Password toggle button styles */
+.form-floating {
+    position: relative;
+}
+
+.password-toggle {
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    cursor: pointer;
+}
+
+.password-toggle i {
+    color: #6c757d;
+    transition: color 0.3s ease;
+}
+
+.password-toggle:hover i {
+    color: #4a90e2;
+}
+
+/* Adjust password input padding to prevent text overlap with icon */
+.form-floating input[type="password"],
+.form-floating input[type="text"] {
+    padding-right: 40px !important;
+}
+
+/* PDF Viewer styles */
+.pdf-container {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+
+.pdf-container iframe {
+    transform-origin: top left;
+    transition: transform 0.2s ease-in-out;
+}
+
+.zoom-controls .btn {
+    padding: 0.25rem 0.5rem;
+}
+
+.zoom-controls .btn:hover {
+    background-color: #e9ecef;
+}
+
+.modal-dialog-scrollable .modal-body {
+    overflow-y: hidden;
+} 
