@@ -1,5 +1,5 @@
 const express = require('express');
-const mysql = require('mysql2');
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -10,11 +10,15 @@ const archiver = require('archiver');
 const XLSX = require('xlsx');
 require('dotenv').config();
 
+// Import models
+const User = require('./models/User');
+const Submission = require('./models/Submission');
+
 const app = express();
 
 // Middleware
 app.use(cors({
-    origin: '*',  // Allow all origins for testing
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true
@@ -35,10 +39,8 @@ const storage = multer.diskStorage({
         cb(null, dir);
     },
     filename: function (req, file, cb) {
-        // Create a safe filename from original file name initially
         let safeName = 'resume';
         
-        // If we have the student's name in the field, use it
         if (req.body && req.body.fullName) {
             safeName = req.body.fullName.replace(/[^a-zA-Z0-9]/g, '_');
         }
@@ -46,7 +48,6 @@ const storage = multer.diskStorage({
         const uniqueSuffix = Date.now();
         const finalName = `${safeName}-${uniqueSuffix}${path.extname(file.originalname)}`;
         
-        // Store the filename temporarily so we can access it in the route
         req.resumeFileName = finalName;
         
         cb(null, finalName);
@@ -66,43 +67,40 @@ const upload = multer({
     }
 });
 
-// MySQL Connection
-const db = mysql.createPool({
-    host: 'localhost',
-    user: 'root',
-    password: 'security',
-    database: 'resume_portal',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
+// MongoDB Connection
+mongoose.connect('mongodb://localhost:27017/resume_portal', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+})
+.then(() => {
+    console.log('MongoDB connected successfully');
+    createAdminUser();
+})
+.catch(err => {
+    console.error('MongoDB connection error:', err);
 });
 
-// Test database connection
-db.getConnection((err, connection) => {
-    if (err) {
-        console.error('Database connection failed:', err);
-        return;
-    }
-    console.log('Database connected successfully');
-    connection.release();
-});
-
-// Create admin user with hashed password
+// Create admin user
 async function createAdminUser() {
     try {
-        const hashedPassword = await bcrypt.hash('Stab@123', 10);
-        await db.promise().query(
-            'UPDATE users SET password_hash = ? WHERE email = ?',
-            [hashedPassword, 'team@stabforge.com']
-        );
-        console.log('Admin user password updated');
+        const adminEmail = 'team@stabforge.com';
+        const adminPassword = 'Stab@123';
+
+        const existingAdmin = await User.findOne({ email: adminEmail });
+        if (!existingAdmin) {
+            const adminUser = new User({
+                fullName: 'Admin',
+                email: adminEmail,
+                passwordHash: adminPassword,
+                role: 'admin'
+            });
+            await adminUser.save();
+            console.log('Admin user created successfully');
+        }
     } catch (error) {
-        console.error('Error updating admin password:', error);
+        console.error('Error creating admin user:', error);
     }
 }
-
-// Call createAdminUser when server starts
-createAdminUser();
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -142,21 +140,21 @@ app.post('/api/register', async (req, res) => {
     }
     
     try {
-        const [existingUser] = await db.promise().query('SELECT id FROM users WHERE email = ?', [email]);
+        const existingUser = await User.findOne({ email });
         
-        if (existingUser.length > 0) {
-                return res.status(400).json({ error: 'Email already registered' });
-            }
-            
-                const hashedPassword = await bcrypt.hash(password, 10);
+        if (existingUser) {
+            return res.status(400).json({ error: 'Email already registered' });
+        }
         
-        const [result] = await db.promise().query(
-            'INSERT INTO users (full_name, email, password_hash, role) VALUES (?, ?, ?, ?)',
-            [fullName, email, hashedPassword, 'student']
-        );
+        const user = await User.create({
+            fullName,
+            email,
+            passwordHash: password,
+            role: 'student'
+        });
 
-        const token = jwt.sign({ userId: result.insertId, role: 'student' }, JWT_SECRET);
-                    res.status(201).json({ token, message: 'Registration successful' });
+        const token = jwt.sign({ userId: user._id, role: 'student' }, JWT_SECRET);
+        res.status(201).json({ token, message: 'Registration successful' });
     } catch (error) {
         console.error('Registration error:', error);
         res.status(500).json({ error: 'Server error' });
@@ -174,32 +172,40 @@ app.post('/api/login', async (req, res) => {
     }
     
     try {
-        const [users] = await db.promise().query('SELECT * FROM users WHERE email = ?', [email]);
-        console.log('User found:', users.length > 0);
+        const user = await User.findOne({ email });
+        console.log('User found:', !!user);
 
-        if (users.length === 0) {
+        if (!user) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
             
-        const user = users[0];
-        const validPassword = await bcrypt.compare(password, user.password_hash);
+        const validPassword = await user.comparePassword(password);
         console.log('Password valid:', validPassword);
             
         if (!validPassword) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
             
-        const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET);
+        const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET);
         console.log('Login successful for:', email);
+        
+        // If user is a student, get their submission to get the full name
+        let fullName = user.fullName;
+        if (user.role === 'student') {
+            const submission = await Submission.findOne({ userId: user._id });
+            if (submission) {
+                fullName = submission.fullName;
+            }
+        }
         
         res.json({
             success: true,
             token,
             user: {
-                id: user.id,
+                id: user._id,
                 email: user.email,
-                fullName: user.full_name,
-                role: user.role
+                role: user.role,
+                fullName: fullName
             }
         });
     } catch (error) {
@@ -208,358 +214,256 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Submit profile and resume
-app.post('/api/submit', verifyToken, (req, res, next) => {
-    upload.single('resume')(req, res, async (err) => {
-        if (err) {
-            return res.status(400).json({ error: err.message });
-        }
-
-        try {
-            const { fullName, mobile, email, institution, bio } = req.body;
-            const userId = req.userId;
-            const resumeFile = req.file;
-
-            if (!resumeFile) {
-                return res.status(400).json({ error: 'Resume file is required' });
+// Submit resume endpoint
+app.post('/api/submit', verifyToken, upload.single('resume'), async (req, res) => {
+    try {
+        // Check if user already has a submission
+        let submission = await Submission.findOne({ userId: req.userId });
+        
+        // If old resume exists and new resume is uploaded, delete the old one
+        if (submission && submission.resumePath && req.file) {
+            try {
+                const oldFilePath = path.join(__dirname, submission.resumePath);
+                if (fs.existsSync(oldFilePath)) {
+                    fs.unlinkSync(oldFilePath);
+                    console.log(`Deleted old resume: ${submission.resumeFilename}`);
+                }
+            } catch (deleteError) {
+                console.error('Error deleting old resume:', deleteError);
+                // Continue with the update even if delete fails
             }
-
-            // Rename the file with the student's name
-            const oldPath = resumeFile.path;
-            const newFileName = `${fullName.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now()}${path.extname(resumeFile.originalname)}`;
-            const newPath = path.join('uploads/resumes', newFileName);
-
-            fs.renameSync(oldPath, newPath);
-
-            const [result] = await db.promise().query(
-                `INSERT INTO submissions 
-                (user_id, full_name, mobile_number, email, institution, bio, resume_filename, resume_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                [userId, fullName, mobile, email, institution, bio, resumeFile.originalname, newPath]
-            );
-
-            res.json({ 
-                success: true, 
-                message: 'Submission successful',
-                submissionId: result.insertId
-            });
-        } catch (error) {
-            console.error('Submission error:', error);
-            res.status(500).json({ error: 'Failed to submit profile' });
         }
-    });
+
+        const updateData = {
+            fullName: req.body.fullName,
+            mobileNumber: req.body.mobile,
+            email: req.body.email,
+            institution: req.body.institution,
+            bio: req.body.bio
+        };
+
+        // Only update resume data if a new file was uploaded
+        if (req.file) {
+            updateData.resumeFilename = req.resumeFileName;
+            updateData.resumePath = `uploads/resumes/${req.resumeFileName}`;
+        }
+
+        if (submission) {
+            // Update existing submission
+            submission = await Submission.findOneAndUpdate(
+                { userId: req.userId },
+                updateData,
+                { new: true }
+            );
+            res.json({
+                message: 'Profile updated successfully',
+                submission
+            });
+        } else {
+            // Create new submission
+            if (!req.file) {
+                return res.status(400).json({ error: 'Resume file is required for initial submission' });
+            }
+            submission = await Submission.create({
+                userId: req.userId,
+                ...updateData,
+                resumeFilename: req.resumeFileName,
+                resumePath: `uploads/resumes/${req.resumeFileName}`
+            });
+            res.status(201).json({
+                message: 'Profile submitted successfully',
+                submission
+            });
+        }
+    } catch (error) {
+        console.error('Submission error:', error);
+        res.status(500).json({ error: 'Error submitting profile' });
+    }
 });
 
 // Get user's submission
 app.get('/api/submission', verifyToken, async (req, res) => {
     try {
-        const [submissions] = await db.promise().query(
-            'SELECT * FROM submissions WHERE user_id = ? ORDER BY submission_date DESC LIMIT 1',
-            [req.userId]
-        );
-
-        if (submissions.length === 0) {
-            return res.json({ 
-                success: true,
-                submission: null
-            });
-        }
-
-        res.json({
-            success: true,
-            submission: submissions[0]
-        });
+        const submission = await Submission.findOne({ userId: req.userId });
+        res.json({ submission });
     } catch (error) {
         console.error('Error fetching submission:', error);
-        res.status(500).json({ error: 'Failed to fetch submission' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
-// Admin: Get all submissions
-app.get('/api/admin/submissions', verifyToken, requireAdmin, async (req, res) => {
+// Get all submissions (admin only)
+app.get('/api/submissions', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const [submissions] = await db.promise().query(
-            `SELECT s.*, u.email as user_email 
-             FROM submissions s 
-             JOIN users u ON s.user_id = u.id 
-             ORDER BY s.submission_date DESC`
-        );
-
-        res.json({
-            success: true,
-            submissions: submissions
-        });
+        const submissions = await Submission.find().populate('userId', 'email');
+        res.json(submissions);
     } catch (error) {
         console.error('Error fetching submissions:', error);
-        res.status(500).json({ error: 'Failed to fetch submissions' });
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
-// Admin: Download all resumes
-app.get('/api/admin/download-all', async (req, res) => {
+// Update submission status (admin only)
+app.put('/api/submissions/:id/status', verifyToken, requireAdmin, async (req, res) => {
     try {
-        const token = req.query.token;
-        if (!token) {
-            return res.status(401).json({ error: 'No token provided' });
-        }
-
-        try {
-            const decoded = jwt.verify(token, JWT_SECRET);
-            if (decoded.role !== 'admin') {
-                return res.status(403).json({ error: 'Access denied' });
-            }
-        } catch (error) {
-            return res.status(401).json({ error: 'Invalid token' });
-        }
-
-        const [submissions] = await db.promise().query('SELECT * FROM submissions');
-        
-        const archive = archiver('zip', {
-            zlib: { level: 9 }
-        });
-
-        res.attachment('all-resumes.zip');
-        archive.pipe(res);
-
-        for (const submission of submissions) {
-            if (submission.resume_path && fs.existsSync(submission.resume_path)) {
-                archive.file(submission.resume_path, { 
-                    name: `${submission.full_name}-${submission.id}.pdf`
-                });
-            }
-        }
-
-        await archive.finalize();
-    } catch (error) {
-        console.error('Error creating zip:', error);
-        res.status(500).json({ error: 'Failed to create zip file' });
-    }
-});
-
-// Download single resume
-app.get('/api/resume/:submissionId', async (req, res) => {
-    try {
-        const token = req.query.token;
-        if (!token) {
-            return res.status(401).json({ error: 'No token provided' });
-        }
-
-        let decoded;
-        try {
-            decoded = jwt.verify(token, JWT_SECRET);
-        } catch (error) {
-            return res.status(401).json({ error: 'Invalid token' });
-        }
-
-        const [submissions] = await db.promise().query(
-            'SELECT * FROM submissions WHERE id = ?',
-            [req.params.submissionId]
+        const submission = await Submission.findByIdAndUpdate(
+            req.params.id,
+            { qualificationStatus: req.body.status },
+            { new: true }
         );
-
-        if (submissions.length === 0 || !submissions[0].resume_path) {
-            return res.status(404).json({ error: 'Resume not found' });
-        }
-
-        const submission = submissions[0];
-
-        // Check if user is admin or the owner of the submission
-        if (decoded.role !== 'admin' && decoded.userId !== submission.user_id) {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-
-        // Update is_downloaded status if admin is downloading
-        if (decoded.role === 'admin') {
-            await db.promise().query(
-                'UPDATE submissions SET is_downloaded = TRUE WHERE id = ?',
-                [req.params.submissionId]
-            );
-        }
-
-        // Set proper headers for file download
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${submission.resume_filename}"`);
         
-        // Send the file
-        res.sendFile(path.resolve(submission.resume_path), (err) => {
-            if (err) {
-                console.error('Download error:', err);
-                return res.status(500).json({ error: 'Error downloading file' });
-            }
-        });
-    } catch (error) {
-        console.error('Resume download error:', error);
-        res.status(500).json({ error: 'Failed to download resume' });
-    }
-});
-
-// View single resume
-app.get('/api/resume/view/:submissionId', async (req, res) => {
-    console.log('View resume endpoint hit:', req.params.submissionId);
-    try {
-        // Get token from query parameter
-        const token = req.query.token;
-        if (!token) {
-            return res.status(401).json({ error: 'No token provided' });
-        }
-
-        // Verify token
-        let decoded;
-        try {
-            decoded = jwt.verify(token, JWT_SECRET);
-        } catch (error) {
-            return res.status(401).json({ error: 'Invalid token' });
-        }
-
-        const [submissions] = await db.promise().query(
-            'SELECT * FROM submissions WHERE id = ?',
-            [req.params.submissionId]
-        );
-
-        if (submissions.length === 0 || !submissions[0].resume_path) {
-            console.log('Resume not found in database');
-            return res.status(404).json({ error: 'Resume not found' });
-        }
-
-        const submission = submissions[0];
-
-        // Check if user is admin or the owner of the submission
-        if (decoded.role !== 'admin' && decoded.userId !== submission.user_id) {
-            return res.status(403).json({ error: 'Access denied' });
-        }
-
-        console.log('Resume path:', submission.resume_path);
-
-        // Check if file exists
-        if (!fs.existsSync(submission.resume_path)) {
-            console.log('Resume file not found on disk');
-            return res.status(404).json({ error: 'Resume file not found' });
-        }
-
-        // Set proper headers for PDF viewing in browser
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'inline; filename="' + submission.resume_filename + '"');
-        
-        // Send the file
-        const absolutePath = path.resolve(submission.resume_path);
-        console.log('Sending file from:', absolutePath);
-        
-        res.sendFile(absolutePath, (err) => {
-            if (err) {
-                console.error('View error:', err);
-                return res.status(500).json({ error: 'Error viewing file' });
-            }
-        });
-    } catch (error) {
-        console.error('Resume view error:', error);
-        res.status(500).json({ error: 'Failed to view resume' });
-    }
-});
-
-// Admin: Delete submission
-app.delete('/api/admin/submission/:submissionId', verifyToken, requireAdmin, async (req, res) => {
-    try {
-        // Get submission details first to get the file path
-        const [submissions] = await db.promise().query(
-            'SELECT * FROM submissions WHERE id = ?',
-            [req.params.submissionId]
-        );
-
-        if (submissions.length === 0) {
+        if (!submission) {
             return res.status(404).json({ error: 'Submission not found' });
         }
-
-        const submission = submissions[0];
-
-        // Delete the file if it exists
-        if (submission.resume_path && fs.existsSync(submission.resume_path)) {
-            fs.unlinkSync(submission.resume_path);
-        }
-
-        // Delete from database
-        await db.promise().query(
-            'DELETE FROM submissions WHERE id = ?',
-            [req.params.submissionId]
-        );
-
-        res.json({ success: true, message: 'Submission deleted successfully' });
-    } catch (error) {
-        console.error('Delete submission error:', error);
-        res.status(500).json({ error: 'Failed to delete submission' });
-    }
-});
-
-// Admin: Update submission qualification status
-app.put('/api/admin/submission/:submissionId/status', verifyToken, requireAdmin, async (req, res) => {
-    try {
-        const { status } = req.body;
-        const validStatuses = ['pending', 'qualified', 'disqualified'];
         
-        if (!validStatuses.includes(status)) {
-            return res.status(400).json({ error: 'Invalid status value' });
-        }
-
-        await db.promise().query(
-            'UPDATE submissions SET qualification_status = ? WHERE id = ?',
-            [status, req.params.submissionId]
-        );
-
-        res.json({ success: true, message: 'Status updated successfully' });
+        res.json({ success: true, submission });
     } catch (error) {
-        console.error('Update status error:', error);
-        res.status(500).json({ error: 'Failed to update status' });
+        console.error('Error updating submission status:', error);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
-// Admin: Download all records in Excel
-app.get('/api/admin/download-records', verifyToken, requireAdmin, async (req, res) => {
+// Mark resume as downloaded
+app.put('/api/submissions/:id/downloaded', verifyToken, requireAdmin, async (req, res) => {
     try {
-        // Fetch all submissions
-        const [submissions] = await db.promise().query(
-            `SELECT full_name, email, mobile_number, institution, 
-             DATE_FORMAT(submission_date, '%Y-%m-%d %H:%i:%s') as submission_date,
-             qualification_status
-             FROM submissions 
-             ORDER BY submission_date DESC`
+        const submission = await Submission.findByIdAndUpdate(
+            req.params.id,
+            { isDownloaded: true },
+            { new: true }
         );
+        
+        if (!submission) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+        
+        res.json({ success: true, submission });
+    } catch (error) {
+        console.error('Error marking resume as downloaded:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
-        // Create workbook and worksheet
+// View resume endpoint
+app.get('/api/resume/view/:id', verifyToken, async (req, res) => {
+    try {
+        const submission = await Submission.findById(req.params.id);
+        
+        if (!submission) {
+            return res.status(404).json({ error: 'Resume not found' });
+        }
+
+        // Check if user has permission to view this resume
+        if (req.userRole !== 'admin' && submission.userId.toString() !== req.userId) {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        const filePath = path.join(__dirname, submission.resumePath);
+        
+        if (fs.existsSync(filePath)) {
+            // Set content type for PDF
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', 'inline; filename=' + submission.resumeFilename);
+            res.sendFile(filePath);
+        } else {
+            res.status(404).json({ error: 'Resume file not found' });
+        }
+    } catch (error) {
+        console.error('Error serving resume:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Download resume endpoint
+app.get('/api/resume/:id', verifyToken, async (req, res) => {
+    try {
+        const submission = await Submission.findById(req.params.id);
+        
+        if (!submission) {
+            return res.status(404).json({ error: 'Resume not found' });
+        }
+
+        // Check if user has permission to download this resume
+        if (req.userRole !== 'admin' && submission.userId.toString() !== req.userId) {
+            return res.status(403).json({ error: 'Access denied' });
+        }
+
+        const filePath = path.join(__dirname, submission.resumePath);
+        
+        if (fs.existsSync(filePath)) {
+            // Update download status if admin is downloading
+            if (req.userRole === 'admin') {
+                submission.isDownloaded = true;
+                await submission.save();
+            }
+
+            // Set headers for file download
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', 'attachment; filename=' + submission.resumeFilename);
+            res.sendFile(filePath);
+        } else {
+            res.status(404).json({ error: 'Resume file not found' });
+        }
+    } catch (error) {
+        console.error('Error downloading resume:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Download all resumes endpoint (admin only)
+app.get('/api/download-all-resumes', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const submissions = await Submission.find();
+        const archive = archiver('zip');
+        
+        archive.on('error', (err) => {
+            res.status(500).json({ error: 'Error creating zip file' });
+        });
+        
+        res.attachment('all-resumes.zip');
+        archive.pipe(res);
+        
+        for (const submission of submissions) {
+            const filePath = path.join(__dirname, submission.resumePath);
+            if (fs.existsSync(filePath)) {
+                archive.file(filePath, { name: `${submission.fullName}-resume.pdf` });
+            }
+        }
+        
+        await archive.finalize();
+    } catch (error) {
+        console.error('Error downloading all resumes:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Download records as Excel (admin only)
+app.get('/api/download-records', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const submissions = await Submission.find().populate('userId', 'email');
+        
         const workbook = XLSX.utils.book_new();
-        const worksheet = XLSX.utils.json_to_sheet(submissions);
-
-        // Set column widths
-        const columnWidths = [
-            { wch: 20 }, // full_name
-            { wch: 25 }, // email
-            { wch: 15 }, // mobile_number
-            { wch: 30 }, // institution
-            { wch: 20 }, // submission_date
-            { wch: 15 }  // qualification_status
-        ];
-        worksheet['!cols'] = columnWidths;
-
-        // Add the worksheet to the workbook
+        const worksheet = XLSX.utils.json_to_sheet(submissions.map(s => ({
+            'Full Name': s.fullName,
+            'Email': s.email,
+            'Mobile': s.mobileNumber,
+            'Institution': s.institution,
+            'Bio': s.bio,
+            'Status': s.qualificationStatus,
+            'Downloaded': s.isDownloaded ? 'Yes' : 'No',
+            'Submission Date': new Date(s.createdAt).toLocaleString()
+        })));
+        
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Submissions');
-
-        // Generate buffer
-        const excelBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-
-        // Set headers for file download
+        
+        const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+        
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=submissions.xlsx');
-        
-        // Send the file
-        res.send(excelBuffer);
-
+        res.send(buffer);
     } catch (error) {
-        console.error('Error generating Excel:', error);
-        res.status(500).json({ error: 'Failed to generate Excel file' });
+        console.error('Error downloading records:', error);
+        res.status(500).json({ error: 'Server error' });
     }
-});
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(500).json({ error: 'Internal server error' });
 });
 
 const PORT = process.env.PORT || 3000;

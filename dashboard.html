@@ -31,15 +31,14 @@
     </nav>
 
     <div class="container mt-5">
-        <div class="row">
-            <div class="col-md-12">
+        <div class="row justify-content-center">
+            <div class="col-md-10">
                 <div class="card shadow">
-                    <div class="card-body">
-                        <h2 class="card-title text-center mb-4">Profile Information</h2>
-                        <form id="profileForm" onsubmit="return handleProfileSubmit(event)">
-                            <!-- Personal Information Section -->
-                            <div class="mb-4">
-                                <h4 class="mb-3">Personal Details</h4>
+                    <div class="card-body p-5">
+                        <h2 class="card-title text-center mb-4">Student Profile</h2>
+                        <form onsubmit="return handleProfileSubmit(event)">
+                            <div class="profile-section">
+                                <h4 class="mb-3">Personal Information</h4>
                                 <div class="row">
                                     <div class="col-md-6">
                                         <div class="mb-3">
@@ -75,7 +74,8 @@
                                     <div class="col-md-6">
                                         <div class="mb-4">
                                             <label for="resumeFile" class="form-label">Upload Resume (PDF) *</label>
-                                <input type="file" class="form-control" id="resumeFile" accept=".pdf" required>
+                                            <input type="file" class="form-control" id="resumeFile" accept=".pdf">
+                                            <small class="text-muted">Maximum file size: 5MB</small>
                                         </div>
                                     </div>
                                     <div class="col-md-6">
@@ -93,6 +93,34 @@
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Viewer Modal -->
+    <div class="modal fade" id="pdfViewerModal" tabindex="-1" aria-labelledby="pdfViewerModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="pdfViewerModalLabel">View Resume</h5>
+                    <div class="zoom-controls ms-3">
+                        <button class="btn btn-sm btn-outline-primary" onclick="zoomPDF('out')">
+                            <i class="fas fa-search-minus"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary mx-1" onclick="zoomPDF('reset')">
+                            <i class="fas fa-undo"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="zoomPDF('in')">
+                            <i class="fas fa-search-plus"></i>
+                        </button>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="pdf-container" style="height: 85vh; overflow: auto;">
+                        <iframe id="pdfViewer" style="width: 100%; height: 100%; border: none; display: block;"></iframe>
                     </div>
                 </div>
             </div>

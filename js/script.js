@@ -54,7 +54,8 @@ async function handleLogin(event) {
         console.log('Login successful');
         localStorage.setItem('token', data.token);
         localStorage.setItem('userRole', data.user.role);
-        localStorage.setItem('userName', data.user.fullName);
+        localStorage.setItem('userEmail', data.user.email);
+        localStorage.setItem('userName', data.user.fullName || data.user.email);
         
         // Redirect based on role
         if (data.user.role === 'admin') {
@@ -123,6 +124,15 @@ async function handleProfileSubmit(event) {
     const resumeFile = document.getElementById('resumeFile').files[0];
     const spinner = document.getElementById('submitSpinner');
     
+    // Check if this is an initial submission
+    const form = event.target;
+    const isUpdate = !!form.dataset.submissionId;
+    
+    if (!isUpdate && !resumeFile) {
+        alert('Please upload your resume');
+        return;
+    }
+    
     const formData = new FormData();
     formData.append('fullName', fullName);
     formData.append('mobile', mobile);
@@ -150,8 +160,16 @@ async function handleProfileSubmit(event) {
             throw new Error(data.error || 'Failed to submit profile');
         }
         
-        alert('Profile submitted successfully');
-        loadSubmission();
+        alert(data.message);
+        
+        // Clear file input after successful submission
+        const fileInput = document.getElementById('resumeFile');
+        if (fileInput) {
+            fileInput.value = '';
+        }
+        
+        // Reload the submission data
+        await loadSubmission();
     } catch (error) {
         alert(error.message);
     } finally {
@@ -174,31 +192,64 @@ async function loadSubmission() {
             throw new Error(data.error || 'Failed to fetch submission');
         }
         
+        const form = document.querySelector('form');
         if (data.submission) {
-            document.getElementById('fullName').value = data.submission.full_name;
-            document.getElementById('mobile').value = data.submission.mobile_number;
-            document.getElementById('email').value = data.submission.email;
-            document.getElementById('institution').value = data.submission.institution;
-            document.getElementById('bio').value = data.submission.bio;
+            // Update form fields
+            document.getElementById('fullName').value = data.submission.fullName || '';
+            document.getElementById('mobile').value = data.submission.mobileNumber || '';
+            document.getElementById('email').value = data.submission.email || '';
+            document.getElementById('institution').value = data.submission.institution || '';
+            document.getElementById('bio').value = data.submission.bio || '';
+            
+            // Store submission ID for updates
+            form.dataset.submissionId = data.submission._id;
             
             // Display current resume if exists
             const currentResumeDiv = document.getElementById('currentResume');
-            if (data.submission.resume_filename) {
-                const token = localStorage.getItem('token');
+            if (data.submission.resumeFilename) {
                 currentResumeDiv.innerHTML = `
-                    <p>Current Resume: ${data.submission.resume_filename}</p>
-                    <a href="http://localhost:3000/api/resume/${data.submission.id}" 
-                       class="btn btn-sm btn-primary"
-                       onclick="downloadResume(event, ${data.submission.id})">
-                        <i class="fas fa-download"></i> Download
-                    </a>
+                    <p>Current Resume: ${data.submission.resumeFilename}</p>
+                    <div class="btn-group" role="group">
+                        <button class="btn btn-sm btn-info me-2" 
+                                onclick="viewResume('${data.submission._id}')">
+                            <i class="fas fa-eye"></i> View
+                        </button>
+                        <button class="btn btn-sm btn-primary"
+                                onclick="downloadResume(event, '${data.submission._id}')">
+                            <i class="fas fa-download"></i> Download
+                        </button>
+                    </div>
                 `;
+
+                // Make resume upload optional since one already exists
+                const resumeInput = document.getElementById('resumeFile');
+                resumeInput.required = false;
             } else {
                 currentResumeDiv.innerHTML = '<p>No resume uploaded yet</p>';
+                // Make resume upload required for initial submission
+                const resumeInput = document.getElementById('resumeFile');
+                resumeInput.required = true;
+            }
+
+            // Update submit button text to indicate update
+            const submitButton = document.querySelector('button[type="submit"]');
+            if (submitButton) {
+                submitButton.querySelector('.btn-text').textContent = 'Update Profile & Resume';
+            }
+        } else {
+            // Reset form for new submission
+            form.reset();
+            form.dataset.submissionId = '';
+            document.getElementById('currentResume').innerHTML = '<p>No resume uploaded yet</p>';
+            document.getElementById('resumeFile').required = true;
+            const submitButton = document.querySelector('button[type="submit"]');
+            if (submitButton) {
+                submitButton.querySelector('.btn-text').textContent = 'Save Profile & Upload Resume';
             }
         }
     } catch (error) {
         console.error('Error loading submission:', error);
+        alert('Failed to load profile data: ' + error.message);
     }
 }
 
@@ -233,7 +284,7 @@ async function deleteSubmission(submissionId) {
 // Handle qualification status change
 async function updateQualificationStatus(submissionId, status) {
     try {
-        const response = await fetch(`http://localhost:3000/api/admin/submission/${submissionId}/status`, {
+        const response = await fetch(`http://localhost:3000/api/submissions/${submissionId}/status`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json',
@@ -248,10 +299,10 @@ async function updateQualificationStatus(submissionId, status) {
         }
 
         // Refresh the submissions table
-        loadAllSubmissions();
+        await loadAllSubmissions();
     } catch (error) {
         console.error('Error updating status:', error);
-        alert(error.message);
+        alert('Failed to update status: ' + error.message);
     }
 }
 
@@ -265,12 +316,29 @@ async function viewResume(submissionId) {
         }
 
         const pdfViewer = document.getElementById('pdfViewer');
-        // Set the iframe source with authorization token in URL
-        pdfViewer.src = `http://localhost:3000/api/resume/view/${submissionId}?token=${encodeURIComponent(token)}`;
+        // Create a blob URL from the fetch response
+        const response = await fetch(`http://localhost:3000/api/resume/view/${submissionId}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to fetch resume');
+        }
+        
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        pdfViewer.src = blobUrl;
         
         // Show the modal
         const modal = new bootstrap.Modal(document.getElementById('pdfViewerModal'));
         modal.show();
+        
+        // Clean up the blob URL when the modal is hidden
+        modal._element.addEventListener('hidden.bs.modal', () => {
+            URL.revokeObjectURL(blobUrl);
+        }, { once: true });
     } catch (error) {
         console.error('Error viewing resume:', error);
         alert('Failed to view resume: ' + error.message);
@@ -280,7 +348,7 @@ async function viewResume(submissionId) {
 // Load all submissions for admin
 async function loadAllSubmissions() {
     try {
-        const response = await fetch('http://localhost:3000/api/admin/submissions', {
+        const response = await fetch('http://localhost:3000/api/submissions', {
             headers: {
                 'Authorization': `Bearer ${localStorage.getItem('token')}`
             }
@@ -296,40 +364,39 @@ async function loadAllSubmissions() {
         const tbody = submissionsTable.querySelector('tbody');
         tbody.innerHTML = '';
         
-        data.submissions.forEach(submission => {
+        data.forEach(submission => {
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td>${submission.full_name}</td>
+                <td>${submission.fullName}</td>
                 <td>${submission.email}</td>
-                <td>${submission.mobile_number}</td>
+                <td>${submission.mobileNumber}</td>
                 <td>${submission.institution}</td>
-                <td>${new Date(submission.submission_date).toLocaleString()}</td>
+                <td>${new Date(submission.createdAt).toLocaleString()}</td>
                 <td>
-                    <div class="form-check">
+                    <div class="form-check d-flex justify-content-center">
                         <input type="checkbox" class="form-check-input" 
-                               ${submission.is_downloaded ? 'checked' : ''} 
+                               ${submission.isDownloaded ? 'checked' : ''} 
                                disabled>
                     </div>
                 </td>
                 <td>
                     <select class="form-select form-select-sm" 
-                            onchange="updateQualificationStatus(${submission.id}, this.value)">
-                        <option value="pending" ${submission.qualification_status === 'pending' ? 'selected' : ''}>Pending</option>
-                        <option value="qualified" ${submission.qualification_status === 'qualified' ? 'selected' : ''}>Qualified</option>
-                        <option value="disqualified" ${submission.qualification_status === 'disqualified' ? 'selected' : ''}>Disqualified</option>
+                            onchange="updateQualificationStatus('${submission._id}', this.value)">
+                        <option value="pending" ${submission.qualificationStatus === 'pending' ? 'selected' : ''}>Pending</option>
+                        <option value="qualified" ${submission.qualificationStatus === 'qualified' ? 'selected' : ''}>Qualified</option>
+                        <option value="disqualified" ${submission.qualificationStatus === 'disqualified' ? 'selected' : ''}>Disqualified</option>
                     </select>
                 </td>
                 <td>
                     <div class="btn-group" role="group">
                         <button class="btn btn-sm btn-info" 
-                                onclick="viewResume(${submission.id})">
+                                onclick="viewResume('${submission._id}')">
                             <i class="fas fa-eye"></i> View
                         </button>
-                        <a href="http://localhost:3000/api/resume/${submission.id}?token=${localStorage.getItem('token')}" 
-                           class="btn btn-sm btn-primary ms-2"
-                           onclick="downloadResume(event, ${submission.id})">
+                        <button class="btn btn-sm btn-primary ms-2"
+                                onclick="downloadResume(event, '${submission._id}')">
                             <i class="fas fa-download"></i> Download
-                        </a>
+                        </button>
                     </div>
                 </td>
             `;
@@ -347,7 +414,36 @@ async function downloadResume(event, submissionId) {
     const token = localStorage.getItem('token');
     
     try {
-        window.location.href = `http://localhost:3000/api/resume/${submissionId}?token=${token}`;
+        const response = await fetch(`http://localhost:3000/api/resume/${submissionId}`, {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to download resume');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `resume-${submissionId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        // Update the downloaded status
+        await fetch(`http://localhost:3000/api/submissions/${submissionId}/downloaded`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        // Refresh the submissions table to show updated download status
+        await loadAllSubmissions();
     } catch (error) {
         console.error('Error downloading resume:', error);
         alert('Failed to download resume');
@@ -358,10 +454,33 @@ async function downloadResume(event, submissionId) {
 async function downloadAllResumes() {
     try {
         const token = localStorage.getItem('token');
-        window.location.href = `http://localhost:3000/api/admin/download-all?token=${token}`;
+        if (!token) {
+            alert('Please login again');
+            return;
+        }
+
+        const response = await fetch('http://localhost:3000/api/download-all-resumes', {
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to download resumes');
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'all-resumes.zip';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
     } catch (error) {
         console.error('Error downloading resumes:', error);
-        alert('Failed to download resumes');
+        alert('Failed to download resumes: ' + error.message);
     }
 }
 
@@ -374,21 +493,17 @@ async function downloadAllRecords() {
             return;
         }
 
-        const response = await fetch('http://localhost:3000/api/admin/download-records', {
+        const response = await fetch('http://localhost:3000/api/download-records', {
             headers: {
                 'Authorization': `Bearer ${token}`
             }
         });
 
         if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to download records');
+            throw new Error('Failed to download records');
         }
 
-        // Get the blob from the response
         const blob = await response.blob();
-        
-        // Create a download link and trigger it
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -407,6 +522,7 @@ async function downloadAllRecords() {
 function handleLogout() {
     localStorage.removeItem('token');
     localStorage.removeItem('userRole');
+    localStorage.removeItem('userEmail');
     localStorage.removeItem('userName');
     window.location.href = 'index.html';
 }
@@ -415,9 +531,11 @@ function handleLogout() {
 function initializePage() {
     checkAuth();
     
+    // Set user name in navbar
     const userNameElement = document.getElementById('userName');
     if (userNameElement) {
-        userNameElement.textContent = localStorage.getItem('userName');
+        const userName = localStorage.getItem('userName');
+        userNameElement.textContent = userName || 'User';
     }
     
     // Load appropriate content based on page
